@@ -1,11 +1,17 @@
 # Reverse-1999-DeskPet
-重返未来1999的二创桌宠
+重返未来1999的二创桌宠  
 
-致谢：
-深蓝互动（Bluepoch），游戏做的真好！
-uttu.merui.net，感谢八咫烏_Merui大大！
-
-这是一个利用deepseek开发的桌宠。模型来自游戏重返未来1999，从uttu.merui.net上下载。
-支持角色语音、字幕、释放技能，时不时还会闲聊、做动作。长时间不管他会睡觉。
-可以更换角色，还可以下载自己喜欢的角色（再次感谢八咫烏_Merui！）
-可以修改一些配置，让她更贴合你的使用习惯。
+# 致谢：
+深蓝互动（Bluepoch），游戏做的真好！  
+uttu.merui.net，感谢八咫烏_Merui大大！  
+还有PySide6 (LGPL-3.0)  
+Pygame (LGPL-2.1)  
+Playwright (Apache-2.0)  
+Spine Runtimes (Spine Runtimes License)  
+它们构建起这个程序的基础。  
+还有大肥鱼……  
+  
+这是一个利用deepseek开发的桌宠。模型来自游戏重返未来1999，从uttu.merui.net上下载。  
+支持角色语音、字幕、释放技能，时不时还会闲聊、做动作。长时间不管他会睡觉。  
+可以更换角色，还可以下载自己喜欢的角色（再次感谢八咫烏_Merui！）  
+可以修改一些配置，让她更贴合你的使用习惯。  
