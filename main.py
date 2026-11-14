@@ -44,6 +44,7 @@ from PySide6.QtCore import Qt, QUrl, QPoint, QTimer
 from PySide6.QtGui import QColor, QAction, QIcon
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtNetwork import QLocalSocket
 from PySide6.QtWidgets import (QApplication, QMainWindow, QMenu, QWidget, QVBoxLayout,
                                QSystemTrayIcon, QStyle)
 
@@ -248,7 +249,10 @@ class DesktopPet(QMainWindow):
         self.tray_menu = QMenu()
         self.tray_menu.setStyleSheet(
             "QMenu { background-color: #333; color: white; border: 1px solid #555; } QMenu::item:selected { background-color: #555; }")
-
+        # 👇 新增：打开面板
+        action_panel = QAction("⚙️ 打开控制面板", self)
+        action_panel.triggered.connect(self.show_panel)
+        self.tray_menu.addAction(action_panel)
         # 动作：显示/隐藏桌宠
         self.action_toggle_show = QAction("👁️ 显示/隐藏桌宠", self)
         self.action_toggle_show.triggered.connect(self.toggle_pet_visibility)
@@ -256,17 +260,40 @@ class DesktopPet(QMainWindow):
 
         self.tray_menu.addSeparator()
 
-        # 动作：完全退出
+        # 🎯 修改：彻底退出（需要连面板一起关掉）
         self.action_quit = QAction("❌ 彻底退出", self)
-        self.action_quit.triggered.connect(QApplication.quit)
+        self.action_quit.triggered.connect(self.quit_app)
         self.tray_menu.addAction(self.action_quit)
 
-        # 绑定菜单并显示托盘
         self.tray_icon.setContextMenu(self.tray_menu)
         self.tray_icon.show()
 
         # 双击托盘图标也能切换显示/隐藏
         self.tray_icon.activated.connect(self.on_tray_activated)
+
+    def show_panel(self):
+        """通知 panel.py 把窗口显示出来"""
+        socket = QLocalSocket()
+        socket.connectToServer("Reverse1999PetPanel_IPC")
+        if socket.waitForConnected(1000):
+            socket.write(b"SHOW")
+            socket.flush()
+            socket.waitForBytesWritten(1000)
+            socket.disconnectFromServer()
+        else:
+            print("⚠️ 找不到控制面板进程")
+
+    def quit_app(self):
+        """通知面板退出，随后自己也退出"""
+        socket = QLocalSocket()
+        socket.connectToServer("Reverse1999PetPanel_IPC")
+        if socket.waitForConnected(1000):
+            socket.write(b"QUIT")
+            socket.flush()
+            socket.waitForBytesWritten(1000)
+            socket.disconnectFromServer()
+
+        QApplication.quit()
 
     def toggle_pet_visibility(self):
         """切换桌宠显示/隐藏"""
@@ -347,7 +374,7 @@ class DesktopPet(QMainWindow):
                     path = os.path.join(self.sound_dir, file)
                     try:
                         self.sound_cache[name] = pygame.mixer.Sound(path)
-                        self.sound_cache[name].set_volume(0.8)
+                        self.sound_cache[name].set_volume(0.2)
                     except Exception:
                         pass
         # 👇 新增：加载字幕
@@ -569,9 +596,30 @@ class DesktopPet(QMainWindow):
             self.execute_skill_from_board(skill["id"])
             return
 
-        # 85% 概率放日常小动作（把 idle 删掉，换成会动的小动作）
-        # 如果模型没有这些动作，网页里会自动 fallback 到 idle
-        action = random.choice(["posture", "giddy","born"])
+        # 🎯 核心改进：动态生成安全的小动作池
+        # 我们允许包含 idle, posture, giddy, victory, born 这些词根的动作（包括它们的 _special 变体）
+        safe_prefixes = ["idle", "posture", "giddy", "victory", "born"]
+        action_pool = []
+
+        for anim in self.available_animations:
+            # 1. 排除技能动作（已有独立逻辑）
+            if anim.startswith(("skill", "unique")):
+                continue
+
+            # 2. 排除负面状态和睡眠（避免小人一直挨打或睡觉）
+            if anim.startswith(("hit", "die", "freeze", "sleep")):
+                continue
+
+            # 3. 只要名字包含安全前缀（比如 idle_special, victory_special），就加入池子
+            if any(anim.startswith(p) for p in safe_prefixes):
+                action_pool.append(anim)
+
+        # 4. 如果没找到（极小概率的极端模型），退回固定的 posture 兜底
+        if action_pool:
+            action = random.choice(action_pool)
+        else:
+            action = "posture"
+
         self.play_js(f"window.playAction('{action}')")
 
     def play_js(self, js_code):
@@ -608,7 +656,29 @@ class DesktopPet(QMainWindow):
             self.wake_up()
 
             if not self.is_dragging and not self.long_press_triggered:
-                action = random.choice(["posture", "giddy"])
+                # 🎯 核心改进：动态生成安全的小动作池
+                # 我们允许包含 idle, posture, giddy, victory, born 这些词根的动作（包括它们的 _special 变体）
+                safe_prefixes = ["idle", "posture", "giddy", "victory", "born"]
+                action_pool = []
+
+                for anim in self.available_animations:
+                    # 1. 排除技能动作（已有独立逻辑）
+                    if anim.startswith(("skill", "unique")):
+                        continue
+
+                    # 2. 排除负面状态和睡眠（避免小人一直挨打或睡觉）
+                    if anim.startswith(("hit", "die", "freeze", "sleep")):
+                        continue
+
+                    # 3. 只要名字包含安全前缀（比如 idle_special, victory_special），就加入池子
+                    if any(anim.startswith(p) for p in safe_prefixes):
+                        action_pool.append(anim)
+
+                # 4. 如果没找到（极小概率的极端模型），退回固定的 posture 兜底
+                if action_pool:
+                    action = random.choice(action_pool)
+                else:
+                    action = "posture"
                 self.action_cooldown = 2.5
                 self.play_js(f"window.playAction('{action}')")
                 self.play_action_voice(action)

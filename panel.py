@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtCore import Qt, QProcess, QUrl, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 def get_base_dir():
     """获取程序所在的绝对根目录（兼容打包和源码运行）"""
     if getattr(sys, 'frozen', False):
@@ -111,7 +112,6 @@ class DetailDialog(QDialog):
             else:
                 self.lbl_playing.setText(f"❌ 找不到文件: {audio_file}")
 
-
 # ================= 主面板 =================
 class PanelWindow(QMainWindow):
     def __init__(self):
@@ -169,11 +169,64 @@ class PanelWindow(QMainWindow):
             QTabBar::tab:selected { background: #555; }
         """)
 
+        self.setup_ipc_server()  # 👈 启动本地通讯服务
+
+    def setup_ipc_server(self):
+        """监听来自桌宠进程的信号"""
+        # 如果已经有一个实例在运行了，发个信号让它显示，然后自己退出
+        socket = QLocalSocket()
+        socket.connectToServer("Reverse1999PetPanel_IPC")
+        if socket.waitForConnected(500):
+            socket.write(b"SHOW")
+            socket.flush()
+            socket.waitForBytesWritten(500)
+            socket.disconnectFromServer()
+            sys.exit(0)  # 当前进程自杀，防止多开
+
+        # 作为第一个实例，启动服务端
+        self.server = QLocalServer(self)
+        self.server.removeServer("Reverse1999PetPanel_IPC")  # 清理可能残留的僵尸服务
+        self.server.listen("Reverse1999PetPanel_IPC")
+        self.server.newConnection.connect(self.handle_ipc_connection)
+
+    def handle_ipc_connection(self):
+        """处理来自桌宠的指令"""
+        client = self.server.nextPendingConnection()
+        client.readyRead.connect(lambda: self.process_ipc_msg(client))
+
+    def process_ipc_msg(self, client):
+        data = client.readAll().data()
+        if data == b"SHOW":
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+        elif data == b"QUIT":
+            self.quit_application()
+        client.disconnectFromServer()
+
+    def quit_application(self):
+        """彻底退出程序"""
+        QApplication.quit()
+
+    def closeEvent(self, event):
+        """拦截右上角的 X 按钮，智能判断是否彻底退出"""
+        # 检查桌宠是否在运行状态
+        if hasattr(self, 'pet_process') and self.pet_process and self.pet_process.state() == QProcess.Running:
+            # 桌宠正在运行，拦截关闭，隐藏自己
+            event.ignore()
+            self.hide()
+            # 可选：在右下角弹个提示（如果你没加过托盘，可以删掉这行）
+            print("面板已缩回后台，可通过桌宠托盘唤出。")
+        else:
+            # 桌宠没运行，直接关闭整个程序
+            event.accept()
+            QApplication.quit()
+
     def show_about_dialog(self):
         about_text = """
         <h2>🦋 重返未来 1999 - 桌面宠物</h2>
         <p><b>制作人：</b> Micropuppy （GitHub主页：https://github.com/MicropuppyGoForward/）</p>
-        <p><b>版本：</b> v1.1.4</p>
+        <p><b>版本：</b> v1.2.4</p>
 
         <h3>💡 项目简介</h3>
         <p>这是一个基于 PySide6 + Playwright + Spine Runtimes 开发的开源同人桌宠项目。</p>
@@ -194,15 +247,27 @@ class PanelWindow(QMainWindow):
 
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("关于与致谢")
-        msg_box.setTextFormat(Qt.RichText)  # 允许 HTML 渲染
+        msg_box.setTextFormat(Qt.RichText)
         msg_box.setText(about_text)
-        msg_box.setIcon(QMessageBox.Information)
+
+        # 🎯 核心修改：加载自定义 webp 图标
+        icon_path = os.path.join(BASE_DIR, "about_icon.webp")  # 替换成你的图片文件名
+        if os.path.exists(icon_path):
+            pixmap = QPixmap(icon_path)
+            # 建议缩放一下，因为 QMessageBox 左侧的图标区域比较小，太大的图会显示得很挤
+            # 这里设为 128x128 像素，保持比例，平滑缩放
+            pixmap = pixmap.scaled(404, 404, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            msg_box.setIconPixmap(pixmap)
+        else:
+            # 如果找不到图片，用系统默认的兜底
+            msg_box.setIcon(QMessageBox.Information)
+            print(f"⚠️ 找不到自定义图标: {icon_path}")
 
         # 设置一个好看点的样式
         msg_box.setStyleSheet("""
-            QMessageBox { background-color: #2b2b2b; }
-            QLabel { color: #eee; min-width: 500px; }
-        """)
+                    QMessageBox { background-color: #2b2b2b; }
+                    QLabel { color: #eee; min-width: 500px; }
+                """)
         msg_box.exec()
     # ================= 1. 角色库 =================
     def init_character_tab(self):
@@ -631,6 +696,7 @@ pause
         self.btn_launch.setText("⏳ 桌宠正在运行中...")
         self.pet_process = QProcess()
         self.pet_process.finished.connect(self.on_pet_closed)
+        self.pet_process.errorOccurred.connect(self.on_pet_error)
         # 🎯 修改：如果是 exe 运行，直接启动自己；如果是源码，启动 python main.py
         if getattr(sys, 'frozen', False):
             self.pet_process.start(sys.executable, ["--run-pet"])
@@ -640,8 +706,16 @@ pause
     def on_pet_closed(self):
         self.btn_launch.setEnabled(True)
         self.btn_launch.setText("✨ 启动桌宠 ✨")
+        # 🎯 新增：如果桌宠被关了（无论是托盘退出还是崩溃），自动把面板弹出来
+        if not self.isVisible():
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+            QMessageBox.warning(self, "提示", "桌宠已退出。")
 
-
+    def on_pet_error(self, error):
+        """桌宠进程发生崩溃时触发"""
+        print(f"桌宠进程发生错误: {error}")
 if __name__ == '__main__':
     # 🎯 拦截安装指令
     if len(sys.argv) > 1 and sys.argv[1] == "--install-playwright":
@@ -677,6 +751,7 @@ if __name__ == '__main__':
 
     # 正常启动面板
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     window = PanelWindow()
     window.show()
     sys.exit(app.exec())
