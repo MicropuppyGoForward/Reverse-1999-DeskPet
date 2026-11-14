@@ -129,14 +129,14 @@ def fetch_voices_from_current_page(page, save_dir):
                     page.wait_for_timeout(200)
                     try:
                         locator.evaluate("el => el.dispatchEvent(new MouseEvent('click', {bubbles: true}))")
-                        page.wait_for_timeout(200)
+                        page.wait_for_timeout(500)
                         if getattr(page, 'last_audio_url', None): captured = True
                     except Exception:
                         pass
                 else:
                     try:
                         locator.evaluate("el => el.dispatchEvent(new MouseEvent('click', {bubbles: true}))")
-                        page.wait_for_timeout(150)
+                        page.wait_for_timeout(350)
                         if getattr(page, 'last_audio_url', None): captured = True
                     except Exception:
                         pass
