@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Skill UI</title>
+    <style>
+        body {
+            margin: 0; 
+            padding: 0; /* 改为 0 */
+            background-color: transparent; /* 改为透明 */
+            display: flex; 
+            justify-content: center; 
+            align-items: flex-end; /* 让卡牌贴着窗口底部 */
+            height: 100vh; 
+            width: 100vw;
+            overflow: visible; /* 允许悬浮放大特效溢出 */
+            font-family: sans-serif;
+        }
+
+
+        #skill-board { 
+            display: flex; 
+            gap: 30px; 
+            align-items: flex-end; 
+            padding-bottom: 20px; /* 给底部留点空间，防止 hover 放大时贴边 */
+        }
+        /* 卡牌容器：不再固定宽高，由 JS 动态赋予比例 */
+        .skill-card {
+            position: relative; 
+            height: 100px; /* 统一高度，宽度由比例自动算 */
+            cursor: grab; 
+            transition: transform 0.2s, filter 0.2s;
+            border-radius: 8px; 
+        }
+
+        .skill-card:hover {
+            transform: translateY(-10px) scale(1.05);
+            filter: drop-shadow(0 0 15px rgba(255, 215, 0, 0.8));
+        }
+
+        .layer { position: absolute; pointer-events: none; background-size: 100% 100%; background-repeat: no-repeat; background-position: center; }
+        .card-bg { top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        .card-select-bg { top: 0; left: 0; width: 100%; height: 100%; z-index: 2; opacity: 0; transition: opacity 0.2s; }
+        .skill-card:hover .card-select-bg { opacity: 1; }
+        
+        /* 角色插画：使用 contain 保证图片自身比例不变，且居中在预留框内 */
+        .main-icon { 
+            top: 9%; left: 1%; width: 96%; height: 78%; 
+            z-index: 3; 
+            background-size: contain; /* 关键：保证插画不变形 */
+        }
+
+        /* 底部底托和类型图标 */
+        .type-base { bottom: 0%; left: 3%; width: 91%; height: 20%; z-index: 4; background-size: contain; }
+        .type-icon { bottom: 0%; left: 0%; width: 100%; height: 20%; z-index: 5; background-size: contain; }
+
+        /* 星星 */
+        .star-container {
+            position: absolute; top: -7%; left: 0; width: 100%;
+            display: flex; justify-content: center; gap: 3px; z-index: 6;
+        }
+        .star { width: 15px; height: 15px; background-size: contain; background-repeat: no-repeat; }
+
+        /* ==== 大招特殊微调 ==== */
+        /* 大招的卡底(194x314)更修长，插画区域也不同 */
+        .is-ultimate .main-icon {
+            top: 12%; left: 9%; width: 83%; height: 83%;
+        }
+        .is-ultimate .type-base {
+            bottom: -9%; left: 6%; width: 90%; height: 20%;
+        }
+    </style>
+</head>
+<body>
+    <div id="skill-board"></div>
+
+    <script>
+        const GLOBAL_ICONS = "icons/";
+        const TYPE_MAP = { "attack": "attack.webp", "debuff": "debuff.webp", "health": "health.webp", "versatile": "versatile.webp" };
+
+        function generateStars(starCount) {
+            let html = "";
+            for (let i = 0; i < 3; i++) {
+                let img = i < starCount ? "xx1.webp" : "xx2.webp";
+                html += `<div class="star" style="background-image: url('${GLOBAL_ICONS}${img}');"></div>`;
+            }
+            return html;
+        }
+
+        window.renderSkills = function(skillsData) {
+            const board = document.getElementById("skill-board");
+            board.innerHTML = "";
+
+            skillsData.forEach((skill, index) => {
+                let bgName, aspectRatio;
+                
+                // === 核心逻辑：根据星级赋予精确的宽高比 ===
+                if (skill.type === "ultimate") {
+                    bgName = "card_dz.webp";
+                    aspectRatio = "194 / 314"; // 来自 card_dz 的尺寸
+                } else {
+                    bgName = `card00${skill.star}.webp`;
+                    if (skill.star === 1) aspectRatio = "168 / 236"; // card001
+                    else if (skill.star === 2) aspectRatio = "180 / 260"; // card002
+                    else aspectRatio = "176 / 260"; // card003
+                }
+
+                let typeBase = skill.type === "ultimate" ? "qm.webp" : "attribute.webp";
+                let typeIcon = skill.type === "ultimate" ? "" : TYPE_MAP[skill.type] || "attack.webp";
+                let isUltClass = skill.type === "ultimate" ? "is-ultimate" : "";
+                // 如果是大招，就不生成星星容器
+                let starsHtml = (skill.type === "ultimate") ? "" : `<div class="star-container">${generateStars(skill.star)}</div>`;
+                // 动态注入 aspect-ratio
+                                const cardHtml = `
+                    <div class="skill-card ${isUltClass}" style="aspect-ratio: ${aspectRatio};" draggable="true" data-index="${index}" data-id="${skill.id}">
+                        <div class="layer card-bg" style="background-image: url('${GLOBAL_ICONS}${bgName}');"></div>
+                        <div class="layer card-select-bg" style="background-image: url('${GLOBAL_ICONS}card_select.webp');"></div>
+                        
+                        <!-- 这里用 starsHtml 变量替代了原来的星星 -->
+                        ${starsHtml}
+
+                        <div class="layer main-icon" style="background-image: url('${skill.icon}');"></div>
+                        
+                        <div class="layer type-base" style="background-image: url('${GLOBAL_ICONS}${typeBase}');"></div>
+                        ${typeIcon ? `<div class="layer type-icon" style="background-image: url('${GLOBAL_ICONS}${typeIcon}');"></div>` : ''}
+                    </div>
+                `;
+                board.innerHTML += cardHtml;
+            });
+            document.querySelectorAll('.skill-card').forEach(card => {
+                card.addEventListener('dragstart', (e) => {
+                    e.dataTransfer.setData("text/plain", card.dataset.id);
+                });
+                // 👇 核心修复 1：加上时间戳，强制每次悬停标题都不一样，解决信号被吞
+                card.addEventListener('mouseenter', () => {
+                    document.title = "SKILL_HOVER:" + card.dataset.id + ":" + Date.now();
+                });
+                card.addEventListener('click', () => {
+                    document.title = "SKILL_SELECTED:" + card.dataset.id;
+                });
+            });
+        };
+
+        // 页面加载后自动执行测试渲染（不再需要按 F12）
+        window.addEventListener("DOMContentLoaded", () => {
+            renderSkills([
+                { id: "skill1", icon: "characters/315902_pestra/icons/skill1.webp", type: "attack", star: 1 },
+                { id: "skill2", icon: "characters/315902_pestra/icons/skill2.webp", type: "debuff", star: 2 },
+                { id: "skill3", icon: "characters/315902_pestra/icons/skill1.webp", type: "health", star: 3 }, // 模拟3星
+                { id: "unique", icon: "characters/315902_pestra/icons/unique.webp", type: "ultimate", star: 3 }
+            ]);
+        });
+    </script>
+</body>
+</html>

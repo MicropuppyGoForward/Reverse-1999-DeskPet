@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Desktop Pet</title>
+    <script src="spine-player.js"></script>
+    <style>
+        html, body { 
+            margin: 0; padding: 0; width: 100vw; height: 100vh; 
+            background-color: transparent; overflow: hidden; pointer-events: none; 
+        }
+        /* 👇 新增：字幕框样式 */
+        #subtitle-box {
+            position: absolute;
+            top: 20px; /* 放在头顶，如果放底部改 bottom: 20px; */
+            left: 50%;
+            transform: translateX(-50%);
+            width: 75%;
+            max-width: 250px;
+            min-height: 40px; /* 防止刚弹出来还没打字时框太小 */
+            background-color: rgba(20, 20, 20, 0.85); /* 深色半透明背景 */
+            color: #f0f0f0;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 13px; /* 字体大小，觉得大了可以调小 */
+            font-family: "Microsoft YaHei", sans-serif;
+            text-align: left;
+            line-height: 1.6;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+            white-space: pre-wrap; /* 让 \n 生效 */
+            display: none;
+            z-index: 9999;
+        }
+        #player-container { 
+            width: 100%; height: 100%; display: block; 
+            transform-origin: bottom center; 
+        }
+    </style>
+</head>
+<body>
+    <div id="player-container"></div>
+    <div id="subtitle-box"></div>
+    <script>
+        // 防崩溃护盾：重写底层边界计算，防止 skill2 的 NaN 破坏画面
+        window.addEventListener('DOMContentLoaded', () => {
+            if (typeof spine !== 'undefined' && spine.Skeleton) {
+                const originalGetBounds = spine.Skeleton.prototype.getBounds;
+                spine.Skeleton.prototype.getBounds = function(...args) {
+                    try {
+                        return originalGetBounds.apply(this, args);
+                    } catch (e) {
+                        return { offsetX: 0, offsetY: 0, width: 200, height: 200 }; 
+                    }
+                };
+            }
+        });
+
+        let petPlayer = null;
+        let actionQueue = [];
+        let isPlaying = false;
+        window.availableAnimations = [];
+
+        window.addEventListener("DOMContentLoaded", function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const skelPath = urlParams.get('skel');
+            const atlasPath = urlParams.get('atlas');
+            const scaleParam = parseFloat(urlParams.get('scale')) || 0.45;
+
+            if (!skelPath || !atlasPath) return;
+
+            const container = document.getElementById("player-container");
+            container.style.transform = `scale(${scaleParam})`;
+
+            const player = new spine.SpinePlayer("player-container", {
+                binaryUrl: skelPath,
+                atlasUrl: atlasPath,
+                animation: "born",
+                alpha: true,
+                showControls: false,
+                debug: false,
+                
+                // 🎯 坚守底线：绝不开启 autoCenter，防止底层崩溃
+                autoCenter: false, 
+                fitToCanvas: false, 
+                
+                // 提供一个足够大的安全视口，不裁剪任何模型
+                viewport: {
+                    x: -500, y: -500, width: 1000, height: 1000, 
+                    padLeft: 0, padRight: 0, padTop: 0, padBottom: 0
+                },
+
+                success: function(inst) {
+                    petPlayer = inst;
+                    
+                    // 🎯 核心修复：纯手动平移，把骨架挪到视口中心！
+                    // 相当于把零点 (0,0) 挪到了画面正中间
+                    setTimeout(() => {
+                        // 👇 新增：直接缩放骨架，数值越大，模型越大（推荐范围 1.5 - 3.0，你可以自己试）
+                        inst.skeleton.scaleX = 2.0; 
+                        inst.skeleton.scaleY = 2.0; 
+
+                        // 平移
+                        inst.skeleton.x = 0; 
+                        // 注意：模型放大后，Y轴的偏移值也要跟着调整，不然脚可能会悬空或穿底
+                        inst.skeleton.y = -300; 
+                    }, 100);
+
+                    try {
+                        if (inst.animationState && inst.animationState.getCurrent(0) && inst.animationState.getCurrent(0).animation) {
+                            const skeleton = inst.animationState.getCurrent(0).animation.timeline.skeleton;
+                            window.availableAnimations = skeleton.data.animations.map(a => a.name);
+                        } else if (inst.skeleton && inst.skeleton.data) {
+                            window.availableAnimations = inst.skeleton.data.animations.map(a => a.name);
+                        }
+                        console.log("✅ 模型加载成功，动作列表:", window.availableAnimations);
+                        document.title = "READY"; 
+                    } catch(e) {
+                        console.error("❌ 提取动作列表失败", e);
+                    }
+
+                    inst.animationState.addListener({
+                        complete: function(trackEntry) {
+                            const animName = trackEntry.animation ? trackEntry.animation.name : "";
+                            if (actionQueue.length > 0) {
+                                playNextInQueue();
+                            } else if (animName !== "idle" && animName !== "sleep") {
+                                isPlaying = false;
+                                safeSetAnimation(inst, "idle", true);
+                            } else if (animName === "sleep") {
+                                safeSetAnimation(inst, "sleep", true);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+
+        function safeSetAnimation(inst, animName, loop) {
+            try {
+                inst.setAnimation(animName, loop);
+            } catch (e) {
+                console.warn(`⚠️ 播放 ${animName} 失败，跳过:`, e);
+            }
+        }
+
+        function playNextInQueue() {
+            if (actionQueue.length > 0) {
+                let nextAction = actionQueue.shift();
+                isPlaying = true;
+                safeSetAnimation(petPlayer, nextAction, false); 
+            }
+        }
+
+        window.playAction = function(actionName) {
+            if (!petPlayer) return;
+            if (!window.availableAnimations.includes(actionName)) {
+                actionName = "idle"; 
+            }
+            actionQueue = []; 
+            isPlaying = true;
+            const isLoop = (actionName === "idle" || actionName === "sleep");
+            safeSetAnimation(petPlayer, actionName, isLoop);
+        };
+
+        window.playComboList = function(animList) {
+            if (!petPlayer || !animList || animList.length === 0) return;
+            let validAnims = animList.filter(name => window.availableAnimations.includes(name));
+            if (validAnims.length > 0) {
+                actionQueue = validAnims;
+                if (!isPlaying) {
+                    playNextInQueue();
+                }
+            }
+        };
+                // 👇 智能语速同步版：精确匹配音频时长
+        let typingTimer = null;
+        let nextSentenceTimer = null;
+        let hideDisplayTimer = null; 
+
+        window.hideSubtitle = function() {
+            const box = document.getElementById("subtitle-box");
+            
+            if (typingTimer) clearTimeout(typingTimer);
+            if (nextSentenceTimer) clearTimeout(nextSentenceTimer);
+            if (hideDisplayTimer) clearTimeout(hideDisplayTimer); 
+            
+            box.style.opacity = 0;
+            hideDisplayTimer = setTimeout(() => { box.style.display = 'none'; }, 300);
+        };
+
+        window.showSubtitle = function(text, durationSec) {
+            const box = document.getElementById("subtitle-box");
+            if (!text) {
+                window.hideSubtitle();
+                return;
+            }
+            
+            if (typingTimer) clearTimeout(typingTimer);
+            if (nextSentenceTimer) clearTimeout(nextSentenceTimer);
+            if (hideDisplayTimer) clearTimeout(hideDisplayTimer);
+            
+            box.style.display = 'block';
+            void box.offsetWidth; 
+            box.style.opacity = 1;
+            box.innerText = "";
+            
+            // 🎯 核心修复 1：建立总控定时器，直接匹配音频时长
+            // 只要音频播完，不管字打没打完，立刻隐藏
+            hideDisplayTimer = setTimeout(() => {
+                window.hideSubtitle();
+            }, durationSec * 1000);
+
+            let sentences = text.split(/(?<=[。！？.!?\n])/).filter(s => s.trim().length > 0);
+            if (sentences.length === 0) sentences = [text];
+            
+            let totalDurationMs = durationSec * 1000; 
+            let totalChars = text.replace(/[\s\n]/g, '').length; 
+            
+            let typingTimeBudget = totalDurationMs * 0.8;
+            let pauseTimeBudget = totalDurationMs * 0.2;
+            
+            let msPerChar = typingTimeBudget / Math.max(totalChars, 1);
+            msPerChar = Math.max(30, Math.min(150, msPerChar)); 
+            
+            let pausePerSentence = pauseTimeBudget / sentences.length;
+
+            function typeNextSentence() {
+                if (sentences.length === 0) {
+                    // 🎯 核心修复 2：打完之后不再强行等 500ms，而是随缘等总控定时器来杀它
+                    return;
+                }
+                
+                let current = sentences.shift().trim();
+                box.innerText = "";
+                let charIndex = 0;
+                
+                function typeChar() {
+                    if (charIndex < current.length) {
+                        box.innerText += current[charIndex];
+                        charIndex++;
+                        typingTimer = setTimeout(typeChar, msPerChar);
+                    } else {
+                        nextSentenceTimer = setTimeout(typeNextSentence, pausePerSentence);
+                    }
+                }
+                
+                typeChar();
+            }
+            
+            typeNextSentence();
+        };
+    </script>
+</body>
+</html>
